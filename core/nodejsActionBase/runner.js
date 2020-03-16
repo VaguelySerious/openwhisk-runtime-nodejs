@@ -22,6 +22,9 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { promisify } = require("util");
+const Redis = require('redis');
+
 
 /** Initializes the handler for the user function. */
 function initializeActionHandler(message) {
@@ -65,17 +68,37 @@ class NodeActionRunner {
 
     constructor(handler) {
         this.userScriptMain = handler;
+        this.prefix = process.env.__OW_NAMESPACE
+        this.secret = process.env.ACTIONCACHE_PASSWORD
+        delete process.env.ACTIONCACHE_PASSWORD
     }
 
     run(args) {
         return new Promise((resolve, reject) => {
-            try {
-                var result = this.userScriptMain(args);
-            } catch (e) {
-                reject(e);
-            }
+			const redis = Redis.createClient({host: "actioncache", port: 6379})
+            const prefix = this.prefix
+			const secret = this.secret
+			const get = promisify(redis.get).bind(redis)
+			const set = promisify(redis.set).bind(redis)
+			const del = promisify(redis.del).bind(redis)
+            // TODO Set a timer on the keys
+			const client = {
+				get: (key) => get(prefix + key),
+				set: (key, value) => set(prefix + key, value),
+				del: (key) => del(prefix + key),
+			}
 
-            this.finalizeResult(result, resolve);
+			redis.auth(secret, (err, res) => {
+				if (err) {
+					return reject(err);
+				}
+				try {
+					var result = this.userScriptMain(args, client);
+				} catch (e) {
+					reject(e);
+				}
+            	this.finalizeResult(result, resolve);
+			})
         });
     };
 
